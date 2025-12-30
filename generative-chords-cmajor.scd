@@ -1,7 +1,12 @@
 // Generative Chordal Movements in C Major
-// Boot the server first: s.boot;
-
-s.boot;
+// Boot the server first if not already running
+if(s.serverRunning.not, {
+	"Booting server...".postln;
+	s.boot;
+	1.wait; // Wait for server to boot
+}, {
+	"Server already running.".postln;
+});
 
 (
 // Define chords in C major (MIDI note numbers, C4 = 60)
@@ -19,98 +24,146 @@ s.boot;
 SynthDef(\chordPad, {
 	arg freq=440, amp=0.15, gate=1, attack=0.5, release=2.0, cutoff=2000;
 	var sig, env;
-
-	env = EnvGen.ar(
-		Env.adsr(attack, 0.1, 0.7, release),
-		gate,
-		doneAction: 2
-	);
-
-	// Rich harmonic content with slight detuning
+	
+	env = EnvGen.ar(Env.adsr(attack, 0.1, 0.7, release), gate, doneAction: 2);
 	sig = Saw.ar(freq) * 0.5;
 	sig = sig + Saw.ar(freq * 1.01) * 0.3;
 	sig = sig + SinOsc.ar(freq * 2) * 0.2;
-
-	// Smooth filtering
 	sig = LPF.ar(sig, cutoff);
 	sig = sig * env * amp;
-
 	Out.ar(0, sig ! 2);
 }).add;
 
-// Generative chord progression function (returns a Routine)
+// Helper: Check if server is ready
+~checkServer = {
+	if(s.serverRunning.not, {
+		"ERROR: Server is not running! Please run: s.boot;".postln;
+		^false;
+	});
+	^true;
+};
+
+// Helper: Safely get chord notes
+~getChordNotes = { |chordName|
+	var notes = ~cMajorChords[chordName];
+	if(notes.isNil, {
+		"WARNING: Chord '%' not found, using I chord instead.".format(chordName).postln;
+		notes = ~cMajorChords[\I];
+	});
+	if(notes.isNil, {
+		"ERROR: No chords defined!".postln;
+		notes = [60, 64, 67]; // Fallback to C major
+	});
+	^notes;
+};
+
+// Play a chord progression
 ~playChordProgression = {
 	arg chordNames, duration=2.0, transitionTime=0.5;
-
+	
+	// Validate inputs
+	if(chordNames.isNil or: { chordNames.isEmpty }, {
+		"ERROR: No chord names provided!".postln;
+		^Routine({});
+	});
+	
+	if(duration <= 0, {
+		"ERROR: Duration must be positive!".postln;
+		^Routine({});
+	});
+	
+	if(transitionTime < 0, {
+		"WARNING: Negative transition time, using 0.1".postln;
+		transitionTime = 0.1;
+	});
+	
+	if(transitionTime >= duration, {
+		"WARNING: Transition time >= duration, adjusting...".postln;
+		transitionTime = duration * 0.2;
+	});
+	
 	^Routine({
-		"Chord progression routine started!".postln;
+		if(~checkServer.value.not, {
+			"ERROR: Cannot play chords - server not running!".postln;
+			^nil;
+		});
+		
 		chordNames.do({
 			arg chordName, index;
 			var notes, synths;
-
-			"Processing chord % (index %)...".format(chordName, index).postln;
-			notes = ~cMajorChords[chordName];
-			if(notes.isNil, {
-				"ERROR: Chord % not found!".format(chordName).postln;
-				notes = ~cMajorChords[\I]; // fallback
-			});
 			
-			"Creating synths for notes: %".format(notes).postln;
+			notes = ~getChordNotes.value(chordName);
+			
+			// Safely create synths
 			synths = notes.collect({
 				arg midiNote;
-				var synth, freq;
-				freq = midiNote.midicps;
-				"  Creating synth: freq = % Hz".format(freq).postln;
-				synth = Synth(\chordPad, [
-					\freq, freq,
-					\amp, 0.12,
-					\attack, 0.3,
-					\release, transitionTime
-				], s);
-				if(synth.isNil, {
-					"  ERROR: Synth creation returned nil!".postln;
+				var synth;
+				if(midiNote.isNil, {
+					"ERROR: Invalid MIDI note!".postln;
+					nil;
 				}, {
-					"  Synth created: %".format(synth).postln;
+					synth = Synth(\chordPad, [
+						\freq, midiNote.midicps,
+						\amp, 0.12,
+						\attack, 0.3,
+						\release, transitionTime
+					], s);
+					if(synth.isNil, {
+						"WARNING: Failed to create synth for note %".format(midiNote).postln;
+					});
+					synth;
 				});
-				synth;
-			});
+			}).select({ |s| s.notNil }); // Remove any nil synths
 			
-			"Created % synths for chord %: %".format(synths.size, chordName, synths).postln;
-
-			// Release previous chord if not first
-			if(index > 0, {
-				~currentSynths.do({ arg s; s.set(\gate, 0); });
-			});
-
-			~currentSynths = synths;
-
-			// Hold chord for duration
-			(duration - transitionTime).wait;
-
-			// Fade out during transition
-			if(index < (chordNames.size - 1), {
-				synths.do({ arg s; s.set(\gate, 0); });
-				transitionTime.wait;
+			if(synths.isEmpty, {
+				"ERROR: No synths created for chord %!".format(chordName).postln;
+			}, {
+				// Release previous chord if not first
+				if(index > 0 and: { ~currentSynths.notNil }, {
+					~currentSynths.do({
+						arg synth;
+						if(synth.notNil, { synth.set(\gate, 0); });
+					});
+				});
+				~currentSynths = synths;
+				(duration - transitionTime).wait;
+				
+				// Fade out during transition
+				if(index < (chordNames.size - 1), {
+					synths.do({ |s| if(s.notNil, { s.set(\gate, 0); }); });
+					transitionTime.wait;
+				});
 			});
 		});
-
+		
 		// Release final chord
-		~currentSynths.do({ arg s; s.set(\gate, 0); });
+		if(~currentSynths.notNil, {
+			~currentSynths.do({ |s| if(s.notNil, { s.set(\gate, 0); }); });
+		});
 	});
 };
 
-// Pattern-based generative progression
+// Generate a chord progression
 ~generativeProgression = {
 	arg length=8, seed=12345;
 	var progression, current;
-
+	
+	// Validate inputs
+	if(length < 1, {
+		"WARNING: Length must be at least 1, using 4".postln;
+		length = 4;
+	});
+	if(length > 50, {
+		"WARNING: Length too large, limiting to 50".postln;
+		length = 50;
+	});
+	
 	thisThread.randSeed = seed;
 	current = \I;
 	progression = [current];
-
+	
 	(length - 1).do({
 		var next;
-		// Common chord progressions in C major with probabilities
 		next = switch(current,
 			\I, { [\IV, \V, \vi].choose },
 			\ii, { [\V, \vi].choose },
@@ -119,173 +172,124 @@ SynthDef(\chordPad, {
 			\V, { [\I, \vi].choose },
 			\vi, { [\IV, \ii, \V].choose },
 			\vii, { [\I].choose },
-			{ [\I].choose } // default
+			{ [\I].choose }
 		);
-		progression = progression.add(next);
-		current = next;
+		if(next.notNil, {
+			progression = progression.add(next);
+			current = next;
+		}, {
+			"WARNING: Invalid chord transition, using I".postln;
+			progression = progression.add(\I);
+			current = \I;
+		});
 	});
-
+	
 	^progression;
 };
 
-// Variable to hold the current playing routine
+// Main routine
 ~currentChordRoutine = nil;
+~currentSynths = nil;
 
-// Function to create a new chord routine
 ~makeChordRoutine = {
-	Routine({
-		"Chord routine started!".postln;
+	if(~checkServer.value.not, {
+		"ERROR: Cannot create routine - server not running!".postln;
+		^nil;
+	});
+	
+	^Routine({
 		inf.do({
-			var progression, seed;
-
-			seed = Date.getDate.stamp.asInteger;
-			progression = ~generativeProgression.value(length: 8, seed: seed);
-
-			"Playing progression: ".post;
-			progression.do({ arg c; c.post; " ".post; });
-			"".postln;
-
-			"About to embed chord progression routine...".postln;
-			~playChordProgression.value(
-				progression,
-				duration: 2.5,
-				transitionTime: 0.4
-			).embedInStream;
-			"Chord progression routine finished.".postln;
-
-			// Pause between progressions
+			var progression;
+			progression = ~generativeProgression.value(
+				length: 8,
+				seed: Date.getDate.stamp.asInteger
+			);
+			if(progression.notNil and: { progression.notEmpty }, {
+				progression.postln;
+				~playChordProgression.value(progression, 2.5, 0.4).embedInStream;
+			}, {
+				"ERROR: Failed to generate progression!".postln;
+			});
 			1.0.wait;
 		});
 	});
 };
 
-// Start/stop functions
+// Control functions
 ~startChords = {
-	// Stop any existing routine first
-	if(~currentChordRoutine.notNil, {
-		~currentChordRoutine.stop;
-	});
-	
-	// Verify server is running
-	if(s.serverRunning.not, {
-		"ERROR: Server not running! Please run: s.boot;".postln;
+	if(~checkServer.value.not, {
 		^false;
 	});
 	
-	// Create and play a new routine
-	"Creating chord routine...".postln;
-	~currentChordRoutine = ~makeChordRoutine.value;
-	"Playing chord routine...".postln;
-	~currentChordRoutine.play;
-	"Generative chords started. Use ~stopChords to stop.".postln;
-	^true;
-};
-
-~stopChords = {
+	// Stop any existing routine
 	if(~currentChordRoutine.notNil, {
 		~currentChordRoutine.stop;
 		~currentChordRoutine = nil;
 	});
+	
+	// Create and start new routine
+	~currentChordRoutine = ~makeChordRoutine.value;
+	if(~currentChordRoutine.notNil, {
+		~currentChordRoutine.play;
+		"Chords started. Use ~stopChords to stop.".postln;
+		^true;
+	}, {
+		"ERROR: Failed to start chords!".postln;
+		^false;
+	});
+};
+
+~stopChords = {
+	var stopped = false;
+	
+	if(~currentChordRoutine.notNil, {
+		~currentChordRoutine.stop;
+		~currentChordRoutine = nil;
+		stopped = true;
+	});
+	
 	if(~currentSynths.notNil, {
-		~currentSynths.do({ arg s; s.set(\gate, 0); });
-	});
-	"Chords stopped.".postln;
-};
-
-// Example: Play a specific progression
-~playExample = {
-	~playChordProgression.value(
-		[\I, \IV, \V, \vi, \IV, \V, \I],
-		duration: 2.0,
-		transitionTime: 0.3
-	).play;
-};
-
-// Test function to verify SynthDef is working
-~testSynth = {
-	"Testing SynthDef...".postln;
-	if(s.serverRunning, {
-		var testSynth;
-		testSynth = Synth(\chordPad, [\freq, 440, \amp, 0.2], s);
-		"Test synth created: %".format(testSynth).postln;
-		"Check node tree - you should see a synth node.".postln;
-		"Stop it with: s.freeAll;".postln;
-		^testSynth;
-	}, {
-		"ERROR: Server not running!".postln;
-		^nil;
-	});
-};
-
-// Simple test - play one chord immediately
-~testChord = {
-	"Testing chord playback...".postln;
-	if(s.serverRunning, {
-		var notes, synths;
-		notes = ~cMajorChords[\I];
-		"Creating synths for notes: %".format(notes).postln;
-		synths = notes.collect({
-			arg midiNote;
-			var synth, freq;
-			freq = midiNote.midicps;
-			"Creating synth: freq = %".format(freq).postln;
-			synth = Synth(\chordPad, [
-				\freq, freq,
-				\amp, 0.15,
-				\attack, 0.1,
-				\release, 1.0
-			], s);
-			synth;
+		~currentSynths.do({
+			arg synth;
+			if(synth.notNil, { synth.set(\gate, 0); });
 		});
-		"Created % synths: %".format(synths.size, synths).postln;
-		"Check node tree now!".postln;
-		^synths;
+		~currentSynths = nil;
+		stopped = true;
+	});
+	
+	if(stopped, {
+		"Chords stopped.".postln;
 	}, {
-		"ERROR: Server not running!".postln;
-		^nil;
+		"No chords were playing.".postln;
 	});
 };
 
-// Instructions
-"".postln;
-"=== Generative Chordal Movements in C Major ===".postln;
-"".postln;
-"Available functions:".postln;
-"  ~startChords     - Start continuous generative progressions".postln;
-"  ~stopChords      - Stop the generative routine".postln;
-"  ~playExample     - Play a classic I-IV-V-vi progression".postln;
-"".postln;
-"Chord dictionary:".postln;
-~cMajorChords.keysValuesDo({ arg key, val;
-	"  %: %".format(key, val).postln;
-});
-"".postln;
-"Boot the server first with: s.boot;".postln;
-"".postln;
+~playExample = {
+	if(~checkServer.value.not, {
+		^false;
+	});
+	
+	~playChordProgression.value([\I, \IV, \V, \vi, \IV, \V, \I], 2.0, 0.3).play;
+	"Playing example progression.".postln;
+	^true;
+};
 
-// Auto-start option (set to true to automatically start playing on load)
+// Auto-start (only if server is ready)
 ~autoStart = true;
 
 if(~autoStart, {
-	"Auto-starting generative chords...".postln;
-	// Wait for SynthDef to be loaded before starting
 	Routine({
-		// Wait a moment for SynthDef to be sent to server
-		0.1.wait;
-		// Verify server is running
-		if(s.serverRunning.not, {
-			"ERROR: Server not running! Please run: s.boot;".postln;
-		}, {
-			"Starting chords...".postln;
+		// Wait for SynthDef to load
+		0.2.wait;
+		if(s.serverRunning, {
 			~startChords.value;
+		}, {
+			"WARNING: Auto-start skipped - server not running. Run ~startChords.value; manually.".postln;
 		});
 	}).play;
-}, {
-	"".postln;
-	"To start playing, run: ~startChords.value;".postln;
-	"Or try: ~playExample.value;".postln;
-	"".postln;
 });
 
-)
+"=== Generative Chordal Movements in C Major ===".postln;
+"Available: ~startChords, ~stopChords, ~playExample".postln;
 
+)
