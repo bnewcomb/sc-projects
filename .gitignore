@@ -1,0 +1,42 @@
+# SuperCollider
+*.scsyndef
+*.scx
+*.scg
+*.scm
+*.scd.bak
+*.scd~
+
+# Compiled files
+*.class
+*.o
+*.so
+*.dylib
+*.dll
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.cache
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# SuperCollider server state
+/tmp/
+/cache/
+
