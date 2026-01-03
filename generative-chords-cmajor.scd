@@ -1,26 +1,26 @@
-// Generative Chordal Movements in C Major
-// Boot the server first if not already running
-if(s.serverRunning.not, {
+// ============================================================================
+// REGION 1: BOOT SERVER
+// ============================================================================
+// Evaluate this region FIRST (Ctrl+Enter on this section)
+// ============================================================================
+
+if(s.serverRunning, {
+	"Server already running.".postln;
+}, {
 	"Booting server...".postln;
 	s.boot;
-	1.wait; // Wait for server to boot
-}, {
-	"Server already running.".postln;
+	"Server booting... (wait a moment before evaluating next region)".postln;
 });
 
-(
-// Define chords in C major (MIDI note numbers, C4 = 60)
-~cMajorChords = (
-	I:   [60, 64, 67],  // C major
-	ii:  [62, 65, 69],  // D minor
-	iii: [64, 67, 71],  // E minor
-	IV:  [65, 69, 72],  // F major
-	V:   [67, 71, 74],  // G major
-	vi:  [69, 72, 76],  // A minor
-	vii: [71, 74, 77]   // B diminished
-);
 
-// SynthDef for a warm, pad-like chord sound
+// ============================================================================
+// REGION 2: DEFINE SYNTHDEF
+// ============================================================================
+// Evaluate this region SECOND (Ctrl+Enter on this section)
+// This sends the SynthDef to the server
+// ============================================================================
+
+(
 SynthDef(\chordPad, {
 	arg freq=440, amp=0.15, gate=1, attack=0.5, release=2.0, cutoff=2000;
 	var sig, env;
@@ -34,7 +34,69 @@ SynthDef(\chordPad, {
 	Out.ar(0, sig ! 2);
 }).add;
 
-// Helper: Check if server is ready
+"SynthDef 'chordPad' added to server.".postln;
+)
+
+
+// ============================================================================
+// REGION 3: DEFINE CHORD DATA
+// ============================================================================
+// Evaluate this region THIRD (Ctrl+Enter on this section)
+// ============================================================================
+
+(
+~cMajorChords = (
+	I:   [60, 64, 67],  // C major
+	ii:  [62, 65, 69],  // D minor
+	iii: [64, 67, 71],  // E minor
+	IV:  [65, 69, 72],  // F major
+	V:   [67, 71, 74],  // G major
+	vi:  [69, 72, 76],  // A minor
+	vii: [71, 74, 77]   // B diminished
+);
+
+"Chord definitions loaded.".postln;
+)
+
+
+// ============================================================================
+// REGION 4: SIMPLE TEST - PLAY ONE CHORD
+// ============================================================================
+// Evaluate this region to TEST if everything works
+// You should hear a C major chord immediately
+// ============================================================================
+
+(
+// Simple test - play one chord that auto-releases after 3 seconds
+var notes, synths;
+notes = ~cMajorChords[\I]; // C major chord
+synths = notes.collect({
+	arg midiNote;
+	Synth(\chordPad, [
+		\freq, midiNote.midicps,
+		\amp, 0.2,
+		\attack, 0.1,
+		\release, 2.0,
+		\gate, 1
+	], s);
+});
+"Test: Created % synths. You should hear a C major chord for 3 seconds.".format(synths.size).postln;
+// Auto-release after 3 seconds
+Routine({
+	3.wait;
+	synths.do({ |s| if(s.notNil, { s.set(\gate, 0); }); });
+	"Test chord released.".postln;
+}).play;
+)
+
+
+// ============================================================================
+// REGION 5: HELPER FUNCTIONS
+// ============================================================================
+// Evaluate this region to load helper functions
+// ============================================================================
+
+(
 ~checkServer = {
 	if(s.serverRunning.not, {
 		"ERROR: Server is not running! Please run: s.boot;".postln;
@@ -43,7 +105,6 @@ SynthDef(\chordPad, {
 	^true;
 };
 
-// Helper: Safely get chord notes
 ~getChordNotes = { |chordName|
 	var notes = ~cMajorChords[chordName];
 	if(notes.isNil, {
@@ -57,7 +118,17 @@ SynthDef(\chordPad, {
 	^notes;
 };
 
-// Play a chord progression
+"Helper functions loaded.".postln;
+)
+
+
+// ============================================================================
+// REGION 6: CHORD PROGRESSION FUNCTION
+// ============================================================================
+// Evaluate this region to load the progression player
+// ============================================================================
+
+(
 ~playChordProgression = {
 	arg chordNames, duration=2.0, transitionTime=0.5;
 	
@@ -73,12 +144,10 @@ SynthDef(\chordPad, {
 	});
 	
 	if(transitionTime < 0, {
-		"WARNING: Negative transition time, using 0.1".postln;
 		transitionTime = 0.1;
 	});
 	
 	if(transitionTime >= duration, {
-		"WARNING: Transition time >= duration, adjusting...".postln;
 		transitionTime = duration * 0.2;
 	});
 	
@@ -93,46 +162,31 @@ SynthDef(\chordPad, {
 			var notes, synths;
 			
 			notes = ~getChordNotes.value(chordName);
+			"Playing chord: % (notes: %)".format(chordName, notes).postln;
 			
-			// Safely create synths
+			// Create synths
 			synths = notes.collect({
 				arg midiNote;
-				var synth;
-				if(midiNote.isNil, {
-					"ERROR: Invalid MIDI note!".postln;
-					nil;
-				}, {
-					synth = Synth(\chordPad, [
-						\freq, midiNote.midicps,
-						\amp, 0.12,
-						\attack, 0.3,
-						\release, transitionTime
-					], s);
-					if(synth.isNil, {
-						"WARNING: Failed to create synth for note %".format(midiNote).postln;
-					});
-					synth;
-				});
-			}).select({ |s| s.notNil }); // Remove any nil synths
+				Synth(\chordPad, [
+					\freq, midiNote.midicps,
+					\amp, 0.12,
+					\attack, 0.3,
+					\release, transitionTime
+				], s);
+			});
 			
-			if(synths.isEmpty, {
-				"ERROR: No synths created for chord %!".format(chordName).postln;
-			}, {
-				// Release previous chord if not first
-				if(index > 0 and: { ~currentSynths.notNil }, {
-					~currentSynths.do({
-						arg synth;
-						if(synth.notNil, { synth.set(\gate, 0); });
-					});
-				});
-				~currentSynths = synths;
-				(duration - transitionTime).wait;
-				
-				// Fade out during transition
-				if(index < (chordNames.size - 1), {
-					synths.do({ |s| if(s.notNil, { s.set(\gate, 0); }); });
-					transitionTime.wait;
-				});
+			// Release previous chord if not first
+			if(index > 0 and: { ~currentSynths.notNil }, {
+				~currentSynths.do({ |s| if(s.notNil, { s.set(\gate, 0); }); });
+			});
+			
+			~currentSynths = synths;
+			(duration - transitionTime).wait;
+			
+			// Fade out during transition
+			if(index < (chordNames.size - 1), {
+				synths.do({ |s| if(s.notNil, { s.set(\gate, 0); }); });
+				transitionTime.wait;
 			});
 		});
 		
@@ -143,20 +197,23 @@ SynthDef(\chordPad, {
 	});
 };
 
-// Generate a chord progression
+"Chord progression function loaded.".postln;
+)
+
+
+// ============================================================================
+// REGION 7: GENERATIVE PROGRESSION FUNCTION
+// ============================================================================
+// Evaluate this region to load the generative algorithm
+// ============================================================================
+
+(
 ~generativeProgression = {
 	arg length=8, seed=12345;
 	var progression, current;
 	
-	// Validate inputs
-	if(length < 1, {
-		"WARNING: Length must be at least 1, using 4".postln;
-		length = 4;
-	});
-	if(length > 50, {
-		"WARNING: Length too large, limiting to 50".postln;
-		length = 50;
-	});
+	if(length < 1, { length = 4; });
+	if(length > 50, { length = 50; });
 	
 	thisThread.randSeed = seed;
 	current = \I;
@@ -178,7 +235,6 @@ SynthDef(\chordPad, {
 			progression = progression.add(next);
 			current = next;
 		}, {
-			"WARNING: Invalid chord transition, using I".postln;
 			progression = progression.add(\I);
 			current = \I;
 		});
@@ -187,7 +243,17 @@ SynthDef(\chordPad, {
 	^progression;
 };
 
-// Main routine
+"Generative progression function loaded.".postln;
+)
+
+
+// ============================================================================
+// REGION 8: MAIN ROUTINE AND CONTROL FUNCTIONS
+// ============================================================================
+// Evaluate this region to load control functions
+// ============================================================================
+
+(
 ~currentChordRoutine = nil;
 ~currentSynths = nil;
 
@@ -207,27 +273,20 @@ SynthDef(\chordPad, {
 			if(progression.notNil and: { progression.notEmpty }, {
 				progression.postln;
 				~playChordProgression.value(progression, 2.5, 0.4).embedInStream;
-			}, {
-				"ERROR: Failed to generate progression!".postln;
 			});
 			1.0.wait;
 		});
 	});
 };
 
-// Control functions
 ~startChords = {
-	if(~checkServer.value.not, {
-		^false;
-	});
+	if(~checkServer.value.not, { ^false; });
 	
-	// Stop any existing routine
 	if(~currentChordRoutine.notNil, {
 		~currentChordRoutine.stop;
 		~currentChordRoutine = nil;
 	});
 	
-	// Create and start new routine
 	~currentChordRoutine = ~makeChordRoutine.value;
 	if(~currentChordRoutine.notNil, {
 		~currentChordRoutine.play;
@@ -240,56 +299,41 @@ SynthDef(\chordPad, {
 };
 
 ~stopChords = {
-	var stopped = false;
-	
 	if(~currentChordRoutine.notNil, {
 		~currentChordRoutine.stop;
 		~currentChordRoutine = nil;
-		stopped = true;
 	});
-	
 	if(~currentSynths.notNil, {
-		~currentSynths.do({
-			arg synth;
-			if(synth.notNil, { synth.set(\gate, 0); });
-		});
+		~currentSynths.do({ |s| if(s.notNil, { s.set(\gate, 0); }); });
 		~currentSynths = nil;
-		stopped = true;
 	});
-	
-	if(stopped, {
-		"Chords stopped.".postln;
-	}, {
-		"No chords were playing.".postln;
-	});
+	"Chords stopped.".postln;
 };
 
 ~playExample = {
-	if(~checkServer.value.not, {
-		^false;
-	});
-	
+	if(~checkServer.value.not, { ^false; });
 	~playChordProgression.value([\I, \IV, \V, \vi, \IV, \V, \I], 2.0, 0.3).play;
 	"Playing example progression.".postln;
 	^true;
 };
 
-// Auto-start (only if server is ready)
-~autoStart = true;
+// Quick test - play a short progression immediately
+~testProgression = {
+	if(~checkServer.value.not, { ^false; });
+	"Testing progression: I IV V vi".postln;
+	~playChordProgression.value([\I, \IV, \V, \vi], 1.5, 0.3).play;
+	^true;
+};
 
-if(~autoStart, {
-	Routine({
-		// Wait for SynthDef to load
-		0.2.wait;
-		if(s.serverRunning, {
-			~startChords.value;
-		}, {
-			"WARNING: Auto-start skipped - server not running. Run ~startChords.value; manually.".postln;
-		});
-	}).play;
-});
-
-"=== Generative Chordal Movements in C Major ===".postln;
-"Available: ~startChords, ~stopChords, ~playExample".postln;
-
+"Control functions loaded.".postln;
+"".postln;
+"=== READY ===".postln;
+"".postln;
+"IMPORTANT: After loading all regions, you must START the generative chords:".postln;
+"".postln;
+"  ~testProgression.value;  - Test with a short 4-chord progression".postln;
+"  ~startChords.value;      - Start continuous generative chords".postln;
+"  ~stopChords.value;       - Stop chords".postln;
+"  ~playExample.value;      - Play example progression".postln;
+"".postln;
 )
